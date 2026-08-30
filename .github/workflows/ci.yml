@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        go-version: ["1.22", "1.23"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+      - name: Build
+        run: go build ./...
+      - name: Test
+        run: go test ./... -v
+
+  vet-and-fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: go vet
+        run: go vet ./...
+      - name: gofmt
+        run: |
+          fmt_out="$(gofmt -l .)"
+          if [ -n "$fmt_out" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$fmt_out"
+            exit 1
+          fi
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Build binary
+        run: go build -o k8s-lint ./cmd/k8s-lint
+      - name: Lint a clean manifest (expect exit 0)
+        run: ./k8s-lint testdata/good
+      - name: Lint a bad manifest (expect non-zero exit)
+        run: |
+          if ./k8s-lint testdata/bad/deployment.yaml; then
+            echo "expected k8s-lint to exit non-zero on a manifest with known issues"
+            exit 1
+          fi
+      - name: SARIF output is valid JSON
+        run: ./k8s-lint --format sarif testdata/bad/deployment.yaml | python3 -m json.tool > /dev/null

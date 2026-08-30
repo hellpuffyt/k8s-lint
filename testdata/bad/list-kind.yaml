@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: list-app
+    spec:
+      replicas: 1
+      template:
+        spec:
+          containers:
+            - name: list-app
+              image: myregistry.example.com/list-app:latest
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: list-app-svc
+    spec:
+      selector:
+        app: list-app
+      ports:
+        - port: 80
