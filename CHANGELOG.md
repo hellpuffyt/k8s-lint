@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- Unknown rule IDs in `--only`/`--ignore` are a usage error (exit 2); a
+  typo previously ran no rules and exited 0. Rule IDs are case-insensitive.
+- Typed list kinds (`DeploymentList`, ...) are expanded like `List`.
+- Security rules inspect `initContainers` (a privileged init container was
+  not reported).
+- SEC010 requires a seccomp profile on every container when none is set at
+  pod level.
+- PodDisruptionBudget matching honours namespaces and `matchExpressions`.
+
+### Changed
+
+- README example output replaced with real output; limitations section.
+
 ## [0.1.0] - 2026-08-30
 
 ### Added
