@@ -1,6 +1,33 @@
 package lint
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+// ValidateRuleIDs returns an error naming any ID that is not a known rule,
+// so a typo in --only or --ignore fails loudly instead of silently running
+// nothing (or ignoring nothing).
+func ValidateRuleIDs(ids []string) error {
+	var unknown []string
+	for _, id := range ids {
+		found := false
+		for _, r := range AllRules {
+			if r.ID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			unknown = append(unknown, id)
+		}
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf("unknown rule ID(s): %s (see --list-rules)", strings.Join(unknown, ", "))
+	}
+	return nil
+}
 
 // AllRules lists every rule this tool implements, in a stable order. It is
 // used for documentation, --only/--ignore validation, and testing that

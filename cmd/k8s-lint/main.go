@@ -75,6 +75,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Ignore:      splitCSV(*ignore),
 		Only:        splitCSV(*only),
 	}
+	for _, ids := range [][]string{opts.Ignore, opts.Only} {
+		if err := lint.ValidateRuleIDs(ids); err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 2
+		}
+	}
 
 	files, err := collectFiles(paths)
 	if err != nil {
@@ -134,7 +140,7 @@ func splitCSV(s string) []string {
 	parts := strings.Split(s, ",")
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
-		p = strings.TrimSpace(p)
+		p = strings.ToUpper(strings.TrimSpace(p))
 		if p != "" {
 			out = append(out, p)
 		}
