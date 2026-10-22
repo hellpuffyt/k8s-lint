@@ -110,13 +110,3 @@ func allContainers(podSpec map[string]interface{}) []containerRef {
 	}
 	return out
 }
-
-// isWorkload reports whether the kind is one this tool inspects pod specs
-// for.
-func isWorkload(kind string) bool {
-	switch kind {
-	case "Pod", "Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "ReplicaSet":
-		return true
-	}
-	return false
-}
