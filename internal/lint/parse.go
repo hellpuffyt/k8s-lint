@@ -2,8 +2,10 @@ package lint
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -52,7 +54,7 @@ func ParseFile(filename string, content []byte) ([]Doc, error) {
 		var node yaml.Node
 		err := dec.Decode(&node)
 		if err != nil {
-			if err.Error() == "EOF" {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return docs, &ParseError{File: filename, DocIndex: idx, Err: err}
@@ -107,10 +109,10 @@ func decodeNode(node *yaml.Node, filename string, idx int) (Doc, bool, error) {
 // document produced by `kubectl get -o yaml` or Helm into one Doc per item.
 // Non-list documents are returned unchanged.
 func expandLists(d Doc) []Doc {
-	if d.Kind != "List" {
+	items, hasItems := d.M["items"].([]interface{})
+	if d.Kind != "List" && !(strings.HasSuffix(d.Kind, "List") && hasItems) {
 		return []Doc{d}
 	}
-	items, _ := d.M["items"].([]interface{})
 	out := make([]Doc, 0, len(items))
 	for i, it := range items {
 		m, ok := it.(map[string]interface{})

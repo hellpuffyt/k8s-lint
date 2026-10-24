@@ -1,5 +1,7 @@
 package lint
 
+import "fmt"
+
 // Small helpers for navigating the generic map[string]interface{} tree that
 // results from decoding arbitrary Kubernetes YAML. Kept deliberately
 // permissive: a missing or wrongly-typed field returns the zero value
@@ -80,12 +82,31 @@ func containers(podSpec map[string]interface{}) []map[string]interface{} {
 	return out
 }
 
-// isWorkload reports whether the kind is one this tool inspects pod specs
-// for.
-func isWorkload(kind string) bool {
-	switch kind {
-	case "Pod", "Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "ReplicaSet":
-		return true
+// containerRef is a container together with the pod-spec field it came
+// from ("containers" or "initContainers") and its index there.
+type containerRef struct {
+	Field string
+	Index int
+	M     map[string]interface{}
+}
+
+// path renders "<prefix>.<field>[<index>:<name>]" for findings.
+func (c containerRef) path(prefix string) string {
+	name, _ := stringOf(c.M["name"])
+	return fmt.Sprintf("%s.%s[%d:%s]", prefix, c.Field, c.Index, name)
+}
+
+// allContainers returns the regular containers followed by the init
+// containers. Init containers run with the same privileges on the same
+// node, so security rules must inspect them too.
+func allContainers(podSpec map[string]interface{}) []containerRef {
+	var out []containerRef
+	for _, field := range []string{"containers", "initContainers"} {
+		for i, c := range sliceOf(get(podSpec, field)) {
+			if cm := mapOf(c); cm != nil {
+				out = append(out, containerRef{Field: field, Index: i, M: cm})
+			}
+		}
 	}
-	return false
+	return out
 }

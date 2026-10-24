@@ -32,8 +32,13 @@ the exact YAML fix.
   `*List`) expansion, Helm-rendered output with blank sections, and clean
   errors (not panics) on malformed YAML.
 - **Cross-resource checks**: matches Deployments/StatefulSets against
-  PodDisruptionBudgets in the same input by label selector.
-- **Filtering**: `--severity`, `--ignore`, `--only`.
+  PodDisruptionBudgets in the same input and namespace by label selector
+  (`matchLabels` and `matchExpressions`).
+- **Init containers** are checked by the security rules (SEC001-SEC003,
+  SEC005-SEC007, SEC009, SEC010) as well as regular containers.
+- **Filtering**: `--severity`, `--ignore`, `--only` (rule IDs are
+  case-insensitive; an unknown ID is a usage error, so a typo cannot
+  silently disable a CI gate).
 - **Three output formats**: human-readable text, JSON, and SARIF 2.1.0 (for
   GitHub code scanning).
 - **CI-friendly**: non-zero exit code whenever a finding meets or exceeds
@@ -101,8 +106,8 @@ k8s-lint --list-rules
 ```
 
 Exit codes: `0` — no findings at or above the severity threshold; `1` —
-findings at or above the threshold; `2` — usage error (bad flags, unreadable
-file, malformed YAML).
+findings at or above the threshold; `2` — usage error (bad flags, unknown
+rule ID, unreadable file, malformed YAML).
 
 ## Rules reference
 
@@ -139,10 +144,7 @@ $ k8s-lint testdata/bad/deployment.yaml
   resource: legacy-app (namespace: default)
   file:     testdata/bad/deployment.yaml:1
   field:    spec.template.spec.containers[0:legacy-app].resources
-  why:      Container has no resource requests and limits set. Without limits, a
-            runaway container can consume all node memory/CPU and get OOM-killed
-            unpredictably or evict its neighbours; without requests, the scheduler
-            cannot bin-pack correctly and may co-locate too many pods on one node.
+  why:      Container has no resource requests and limits set. Without limits, a runaway container can consume all node memory/CPU and get OOM-killed unpredictably or evict its neighbours; without requests, the scheduler cannot bin-pack correctly and may co-locate too many pods on one node.
   fix:
     resources:
       requests:
@@ -151,6 +153,7 @@ $ k8s-lint testdata/bad/deployment.yaml
       limits:
         cpu: "500m"
         memory: "256Mi"
+
 ...
 15 issue(s): 3 critical, 3 high, 6 medium, 3 low
 ```
@@ -197,8 +200,25 @@ example manifests used by both the Go tests and the CI smoke job.
 `k8s-lint` only reads local files; it makes no network calls and requires no
 cluster credentials. Its findings can reference sensitive-looking field
 names (e.g. secret env var names) from the manifests you point it at —
-review output before sharing it outside your team. Report vulnerabilities by
-opening a GitHub issue.
+review output before sharing it outside your team. Report vulnerabilities
+privately at https://github.com/hellpuffyt/k8s-lint/security/advisories/new
+(see [SECURITY.md](SECURITY.md)).
+
+## Limitations
+
+- Reported line numbers point at the start of the YAML document (or of the
+  `List` that contained the item), not at the offending field; the `field`
+  path identifies the field.
+- REL007 checks `minAvailable` only; a PDB with `maxUnavailable: 0` also
+  blocks every eviction and is not reported.
+- REL005 cannot see a HorizontalPodAutoscaler that manages `replicas`.
+- SEC008 looks at the pod spec only; `automountServiceAccountToken: false`
+  set on the ServiceAccount object is not taken into account.
+- `ephemeralContainers` are not inspected. Unknown kinds (CRDs) are skipped.
+- Verified locally on macOS; Linux and Windows rely on CI.
+
+See [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md) for the
+audit evidence.
 
 ## License
 

@@ -190,3 +190,19 @@ func TestRun_ListKindManifest(t *testing.T) {
 		t.Error("expected findings from the expanded List items")
 	}
 }
+
+// Regression: an unknown ID in --only made k8s-lint run no rules and exit 0
+// ("No issues found"), silently disabling a CI gate.
+func TestRun_UnknownRuleIDIsUsageError(t *testing.T) {
+	for _, flagName := range []string{"--only", "--ignore"} {
+		var out, errOut bytes.Buffer
+		code := run([]string{flagName, "SEC01", testdata("bad", "deployment.yaml")}, &out, &errOut)
+		if code != 2 || !strings.Contains(errOut.String(), "unknown rule ID(s): SEC01") {
+			t.Fatalf("%s typo: exit %d, stderr %q", flagName, code, errOut.String())
+		}
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"--only", "sec001", testdata("bad", "deployment.yaml")}, &out, &errOut); code != 1 || !strings.Contains(out.String(), "SEC001") {
+		t.Fatalf("lower-case rule ID: exit %d out %q err %q", code, out.String(), errOut.String())
+	}
+}

@@ -13,13 +13,13 @@ func rulePrivileged(d Doc) []Finding {
 		return nil
 	}
 	var findings []Finding
-	for i, c := range containers(podSpec) {
+	for _, ref := range allContainers(podSpec) {
+		c := ref.M
 		sc := mapOf(c["securityContext"])
 		if b, ok := boolOf(sc["privileged"]); ok && b {
-			name, _ := stringOf(c["name"])
 			findings = append(findings, Finding{
 				RuleID: "SEC001", Severity: SeverityCritical, Kind: d.Kind, Name: d.Name, Namespace: d.Namespace,
-				Path: fmt.Sprintf("%s.containers[%d:%s].securityContext.privileged", prefix, i, name),
+				Path: ref.path(prefix) + ".securityContext.privileged",
 				Message: "Container runs privileged, giving it full access to the host's devices and kernel " +
 					"capabilities. A compromised container can escape to the host, read every other pod's data, " +
 					"and pivot across the cluster.",
@@ -40,7 +40,8 @@ func ruleRunAsRoot(d Doc) []Finding {
 	}
 	podSC := mapOf(podSpec["securityContext"])
 	var findings []Finding
-	for i, c := range containers(podSpec) {
+	for _, ref := range allContainers(podSpec) {
+		c := ref.M
 		sc := mapOf(c["securityContext"])
 		nonRoot, nonRootSet := boolOf(sc["runAsNonRoot"])
 		if !nonRootSet {
@@ -54,7 +55,6 @@ func ruleRunAsRoot(d Doc) []Finding {
 		if (nonRootSet && nonRoot) && !explicitRoot {
 			continue
 		}
-		name, _ := stringOf(c["name"])
 		msg := "Container has no runAsNonRoot: true (pod or container level), so it may run as root by default. " +
 			"A container-escape or path-traversal bug then hands the attacker root inside the container, " +
 			"maximizing the blast radius of any subsequent kernel or mount exploit."
@@ -65,7 +65,7 @@ func ruleRunAsRoot(d Doc) []Finding {
 		}
 		findings = append(findings, Finding{
 			RuleID: "SEC002", Severity: SeverityHigh, Kind: d.Kind, Name: d.Name, Namespace: d.Namespace,
-			Path:    fmt.Sprintf("%s.containers[%d:%s].securityContext.runAsNonRoot", prefix, i, name),
+			Path:    ref.path(prefix) + ".securityContext.runAsNonRoot",
 			Message: msg,
 			Fix:     "securityContext:\n  runAsNonRoot: true\n  runAsUser: 1000",
 			File:    d.File, Line: d.Line,
@@ -82,15 +82,15 @@ func ruleWritableRootFS(d Doc) []Finding {
 		return nil
 	}
 	var findings []Finding
-	for i, c := range containers(podSpec) {
+	for _, ref := range allContainers(podSpec) {
+		c := ref.M
 		sc := mapOf(c["securityContext"])
 		if b, ok := boolOf(sc["readOnlyRootFilesystem"]); ok && b {
 			continue
 		}
-		name, _ := stringOf(c["name"])
 		findings = append(findings, Finding{
 			RuleID: "SEC003", Severity: SeverityMedium, Kind: d.Kind, Name: d.Name, Namespace: d.Namespace,
-			Path: fmt.Sprintf("%s.containers[%d:%s].securityContext.readOnlyRootFilesystem", prefix, i, name),
+			Path: ref.path(prefix) + ".securityContext.readOnlyRootFilesystem",
 			Message: "Root filesystem is writable. An attacker who gains code execution can drop tools, modify " +
 				"binaries, or persist a backdoor directly on disk instead of being confined to explicitly " +
 				"mounted volumes.",
@@ -152,17 +152,17 @@ func ruleDangerousCapabilities(d Doc) []Finding {
 		return nil
 	}
 	var findings []Finding
-	for i, c := range containers(podSpec) {
+	for _, ref := range allContainers(podSpec) {
+		c := ref.M
 		sc := mapOf(c["securityContext"])
 		caps := mapOf(sc["capabilities"])
 		add := sliceOf(caps["add"])
-		name, _ := stringOf(c["name"])
 		for _, a := range add {
 			capName, _ := stringOf(a)
 			if dangerousCapabilities[capName] {
 				findings = append(findings, Finding{
 					RuleID: "SEC005", Severity: SeverityCritical, Kind: d.Kind, Name: d.Name, Namespace: d.Namespace,
-					Path: fmt.Sprintf("%s.containers[%d:%s].securityContext.capabilities.add", prefix, i, name),
+					Path: ref.path(prefix) + ".securityContext.capabilities.add",
 					Message: fmt.Sprintf("Container adds the %s capability. This grants near-root-equivalent "+
 						"power inside the container (e.g. raw sockets for spoofing, ptrace for reading other "+
 						"processes' memory, or module loading into the host kernel), turning a routine app bug "+
@@ -184,16 +184,16 @@ func ruleAllowPrivilegeEscalation(d Doc) []Finding {
 		return nil
 	}
 	var findings []Finding
-	for i, c := range containers(podSpec) {
+	for _, ref := range allContainers(podSpec) {
+		c := ref.M
 		sc := mapOf(c["securityContext"])
 		b, ok := boolOf(sc["allowPrivilegeEscalation"])
 		if ok && !b {
 			continue
 		}
-		name, _ := stringOf(c["name"])
 		findings = append(findings, Finding{
 			RuleID: "SEC006", Severity: SeverityHigh, Kind: d.Kind, Name: d.Name, Namespace: d.Namespace,
-			Path: fmt.Sprintf("%s.containers[%d:%s].securityContext.allowPrivilegeEscalation", prefix, i, name),
+			Path: ref.path(prefix) + ".securityContext.allowPrivilegeEscalation",
 			Message: "allowPrivilegeEscalation is not explicitly disabled, so it defaults to true. A process " +
 				"in the container can gain more privileges than its parent (e.g. via a setuid binary), " +
 				"undermining any other hardening applied to the container.",
@@ -212,8 +212,8 @@ func ruleSecretEnvVars(d Doc) []Finding {
 		return nil
 	}
 	var findings []Finding
-	for i, c := range containers(podSpec) {
-		name, _ := stringOf(c["name"])
+	for _, ref := range allContainers(podSpec) {
+		c := ref.M
 		var names []string
 		for _, e := range sliceOf(c["env"]) {
 			em := mapOf(e)
@@ -236,7 +236,7 @@ func ruleSecretEnvVars(d Doc) []Finding {
 		sort.Strings(names)
 		findings = append(findings, Finding{
 			RuleID: "SEC007", Severity: SeverityMedium, Kind: d.Kind, Name: d.Name, Namespace: d.Namespace,
-			Path: fmt.Sprintf("%s.containers[%d:%s].env", prefix, i, name),
+			Path: ref.path(prefix) + ".env",
 			Message: fmt.Sprintf("Secret(s) %v are injected as environment variables. Env vars are inherited by "+
 				"child processes, get dumped in crash reports/stack traces, and are readable via /proc/<pid>/environ "+
 				"by anything with host/container access — a much wider exposure surface than a mounted file.", names),
@@ -276,15 +276,15 @@ func ruleLatestTag(d Doc) []Finding {
 		return nil
 	}
 	var findings []Finding
-	for i, c := range containers(podSpec) {
+	for _, ref := range allContainers(podSpec) {
+		c := ref.M
 		image, _ := stringOf(c["image"])
 		if !isLatestTag(image) {
 			continue
 		}
-		name, _ := stringOf(c["name"])
 		findings = append(findings, Finding{
 			RuleID: "SEC009", Severity: SeverityMedium, Kind: d.Kind, Name: d.Name, Namespace: d.Namespace,
-			Path: fmt.Sprintf("%s.containers[%d:%s].image", prefix, i, name),
+			Path: ref.path(prefix) + ".image",
 			Message: "Image is pinned to :latest (or has no tag, which means the same thing). Two pods of the " +
 				"same Deployment can silently run different code if the tag was repushed between scheduling " +
 				"events, and there is no way to audit or pin exactly what is deployed.",
@@ -306,11 +306,19 @@ func ruleSeccompProfile(d Doc) []Finding {
 	if hasSeccomp(podSC) {
 		return nil
 	}
-	for _, c := range containers(podSpec) {
-		sc := mapOf(c["securityContext"])
-		if hasSeccomp(sc) {
-			return nil
+	// Without a pod-level profile, every container (including init
+	// containers) needs its own; one hardened container does not cover
+	// the others.
+	refs := allContainers(podSpec)
+	covered := len(refs) > 0
+	for _, ref := range refs {
+		if !hasSeccomp(mapOf(ref.M["securityContext"])) {
+			covered = false
+			break
 		}
+	}
+	if covered {
+		return nil
 	}
 	return []Finding{{
 		RuleID: "SEC010", Severity: SeverityLow, Kind: d.Kind, Name: d.Name, Namespace: d.Namespace,

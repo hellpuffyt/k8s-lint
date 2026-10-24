@@ -189,7 +189,7 @@ func ruleDisruptionBudgets(docs []Doc) []Finding {
 			continue // single-replica already flagged by REL005; PDB adds nothing.
 		}
 		labels := podLabels(spec)
-		matched, matchedPDB := findMatchingPDB(pdbs, labels)
+		matched, matchedPDB := findMatchingPDB(pdbs, d.Namespace, labels)
 		if !matched {
 			findings = append(findings, Finding{
 				RuleID: "REL006", Severity: SeverityMedium, Kind: d.Kind, Name: d.Name, Namespace: d.Namespace,
@@ -231,27 +231,82 @@ func podLabels(workloadSpec map[string]interface{}) map[string]string {
 	return out
 }
 
-func findMatchingPDB(pdbs []Doc, labels map[string]string) (bool, Doc) {
+// findMatchingPDB returns the first PodDisruptionBudget in the workload's
+// namespace whose selector (matchLabels and matchExpressions) selects the
+// pod labels. A PDB only applies within its own namespace; a document
+// without a namespace is assumed to be applied into the same namespace as
+// the workload (e.g. `kubectl apply -n`).
+func findMatchingPDB(pdbs []Doc, namespace string, labels map[string]string) (bool, Doc) {
 	for _, p := range pdbs {
-		spec := mapOf(p.M["spec"])
-		sel := mapOf(spec["selector"])
-		match := mapOf(sel["matchLabels"])
-		if len(match) == 0 {
+		if p.Namespace != "" && namespace != "" && p.Namespace != namespace {
 			continue
 		}
-		allMatch := true
-		for k, v := range match {
-			sv, _ := stringOf(v)
-			if labels[k] != sv {
-				allMatch = false
-				break
-			}
-		}
-		if allMatch {
+		sel := mapOf(mapOf(p.M["spec"])["selector"])
+		if selects(sel, labels) {
 			return true, p
 		}
 	}
 	return false, Doc{}
+}
+
+// selects implements Kubernetes label-selector semantics for matchLabels and
+// matchExpressions (In, NotIn, Exists, DoesNotExist). An empty selector is
+// treated as selecting nothing here, to avoid matching every workload.
+func selects(sel map[string]interface{}, labels map[string]string) bool {
+	match := mapOf(sel["matchLabels"])
+	exprs := sliceOf(sel["matchExpressions"])
+	if len(match) == 0 && len(exprs) == 0 {
+		return false
+	}
+	for k, v := range match {
+		sv, _ := stringOf(v)
+		if got, ok := labels[k]; !ok || got != sv {
+			return false
+		}
+	}
+	for _, e := range exprs {
+		em := mapOf(e)
+		key, _ := stringOf(em["key"])
+		op, _ := stringOf(em["operator"])
+		val, has := labels[key]
+		var values []string
+		for _, v := range sliceOf(em["values"]) {
+			if s, ok := stringOf(v); ok {
+				values = append(values, s)
+			}
+		}
+		inValues := has && containsString(values, val)
+		switch op {
+		case "In":
+			if !inValues {
+				return false
+			}
+		case "NotIn":
+			if inValues {
+				return false
+			}
+		case "Exists":
+			if !has {
+				return false
+			}
+		case "DoesNotExist":
+			if has {
+				return false
+			}
+		default:
+			return false // unknown operator: do not claim a match
+		}
+	}
+	return true
+}
+
+func containsString(list []string, v string) bool {
+	for _, s := range list {
+		if s == v {
+			return true
+		}
+	}
+	return false
 }
 
 func minBlocksEviction(pdb Doc, replicas int) bool {
