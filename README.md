@@ -3,12 +3,66 @@
 A linter for Kubernetes manifests that explains **the outage each rule
 prevents**, not just the rule ID that fired.
 
+**Status:** version 0.1.0, a working CLI with 20 rules. Install it with
+`go install`; there are no prebuilt binaries. CI builds and tests it with Go
+1.22 and 1.23 on Linux, macOS and Windows.
+
+## Demo
+
+<img src="docs/screenshots/critical-findings-bad-deployment.png" width="100%" alt="Terminal capture: k8s-lint --severity critical on testdata/bad/deployment.yaml reports SEC001 privileged, SEC004 hostNetwork and SEC005 SYS_ADMIN, each with the resource, file, field path, why it matters and the YAML fix, then '3 issue(s): 3 critical'; k8s-lint on testdata/good prints 'No issues found.'">
+
+*Terminal capture of a real run against the manifests in `testdata/`.*
+
+```console
+$ k8s-lint --severity critical testdata/bad/deployment.yaml
+[CRITICAL] SEC001 (Deployment)
+  resource: legacy-app (namespace: default)
+  file:     testdata/bad/deployment.yaml:1
+  field:    spec.template.spec.containers[0:legacy-app].securityContext.privileged
+  why:      Container runs privileged, giving it full access to the host's devices and kernel capabilities. A compromised container can escape to the host, read every other pod's data, and pivot across the cluster.
+  fix:
+    securityContext:
+      privileged: false
+
+[CRITICAL] SEC004 (Deployment)
+  resource: legacy-app (namespace: default)
+  file:     testdata/bad/deployment.yaml:1
+  field:    spec.template.spec.hostNetwork
+  why:      Pod shares the host's network namespace, exposing every host network interface and letting the container sniff or spoof traffic for other pods on the node.
+  fix:
+    spec:
+      hostNetwork: false
+
+[CRITICAL] SEC005 (Deployment)
+  resource: legacy-app (namespace: default)
+  file:     testdata/bad/deployment.yaml:1
+  field:    spec.template.spec.containers[0:legacy-app].securityContext.capabilities.add
+  why:      Container adds the SYS_ADMIN capability. This grants near-root-equivalent power inside the container (e.g. raw sockets for spoofing, ptrace for reading other processes' memory, or module loading into the host kernel), turning a routine app bug into a full host compromise.
+  fix:
+    securityContext:
+      capabilities:
+        drop: ["ALL"]
+        # add only the specific capability actually required, if any
+
+3 issue(s): 3 critical, 0 high, 0 medium, 0 low
+
+$ k8s-lint testdata/good
+No issues found.
+```
+
+The first run exits `1` because findings were reported; the second exits `0`.
+
 ## What
 
-`k8s-lint` reads Kubernetes YAML manifests — plain files, multi-document
-files, `kubectl get -o yaml` `List` output, or Helm-rendered templates — and
+`k8s-lint` reads Kubernetes YAML manifests (plain files, multi-document
+files, `kubectl get -o yaml` `List` output, or Helm-rendered templates) and
 checks them against 20 rules covering reliability and security defaults.
 It needs no cluster connection; it only reads files.
+
+Container and pod rules apply to `Pod`, `Deployment`, `StatefulSet`,
+`DaemonSet`, `ReplicaSet`, `Job` and `CronJob`. `PodDisruptionBudget` objects
+are read for the cross-resource checks. Other kinds, including CRDs, are
+skipped.
 
 ## Why
 
@@ -21,7 +75,7 @@ the image that was actually running).
 
 Existing linters print a rule ID and a one-line description. That's not
 enough to get a team to act on it. `k8s-lint` instead explains, for every
-finding, **what actually breaks in production if you ignore it** — and gives
+finding, **what actually breaks in production if you ignore it**, and gives
 the exact YAML fix.
 
 ## Features
@@ -43,7 +97,7 @@ the exact YAML fix.
   GitHub code scanning).
 - **CI-friendly**: non-zero exit code whenever a finding meets or exceeds
   the severity threshold.
-- No cluster connection required — it only lints files.
+- No cluster connection required; it only lints files.
 
 ## Architecture
 
@@ -67,6 +121,9 @@ values) instead of failing to parse a whole file over one unknown field.
 
 ## Installation
 
+Requires Go 1.22 or newer (the `go` directive in `go.mod`). The only
+dependency is `gopkg.in/yaml.v3`.
+
 ```sh
 go install github.com/hellpuffyt/k8s-lint/cmd/k8s-lint@latest
 ```
@@ -88,7 +145,7 @@ k8s-lint deployment.yaml
 # Lint every .yaml/.yml file under a directory, recursively
 k8s-lint ./manifests
 
-# Only fail the build on high-or-worse findings
+# Report, and fail on, only high-or-worse findings
 k8s-lint --severity high ./manifests
 
 # Skip specific rules (e.g. a team that intentionally runs single-replica in dev)
@@ -103,11 +160,32 @@ k8s-lint --format sarif ./manifests > results.sarif
 
 # List every rule this version implements
 k8s-lint --list-rules
+k8s-lint --version
 ```
 
-Exit codes: `0` — no findings at or above the severity threshold; `1` —
-findings at or above the threshold; `2` — usage error (bad flags, unknown
-rule ID, unreadable file, malformed YAML).
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--severity` | `low` | Minimum severity to report **and** to fail on: `low`, `medium`, `high`, `critical`. Lower findings are not printed |
+| `--ignore` | | Comma-separated rule IDs to skip |
+| `--only` | | Comma-separated rule IDs to run exclusively |
+| `--format` | `text` | `text`, `json` or `sarif` |
+| `--list-rules` | | Print every rule ID, severity and description, then exit |
+| `--version` | | Print the version, then exit |
+
+Put flags before the paths. Go's flag parser stops at the first path, so
+`k8s-lint deployment.yaml --format json` treats `--format` as a file name and
+exits `2`.
+
+Directories are walked recursively for `.yaml` and `.yml` files. A file that
+fails to parse stops the whole run with exit `2` and no findings, so one
+malformed manifest in a directory blocks the rest.
+
+Exit codes: `0` no findings at or above the severity threshold, `1` findings
+at or above the threshold, `2` usage error (bad flags, unknown rule ID,
+unreadable file, malformed YAML, no YAML files found).
+
+`--format json` prints an array of findings, each with `ruleId`, `severity`,
+`kind`, `name`, `namespace`, `path`, `message`, `fix`, `file` and `line`.
 
 ## Rules reference
 
@@ -188,6 +266,11 @@ gofmt -l .      # must print nothing
 go test ./... -v
 ```
 
+CI runs the same commands, plus a smoke job that builds the binary, expects
+exit `0` on `testdata/good` and non-zero on `testdata/bad/deployment.yaml`, and
+checks that the SARIF output is valid JSON. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for adding a rule.
+
 Every rule is tested in both directions: it fires on a manifest that
 violates it, and it provably does not fire on a hardened one. Known
 false-positive guards (Jobs don't need readiness probes, DaemonSets don't
@@ -199,8 +282,8 @@ example manifests used by both the Go tests and the CI smoke job.
 
 `k8s-lint` only reads local files; it makes no network calls and requires no
 cluster credentials. Its findings can reference sensitive-looking field
-names (e.g. secret env var names) from the manifests you point it at —
-review output before sharing it outside your team. Report vulnerabilities
+names (e.g. secret env var names) from the manifests you point it at, so
+review the output before sharing it outside your team. Report vulnerabilities
 privately at https://github.com/hellpuffyt/k8s-lint/security/advisories/new
 (see [SECURITY.md](SECURITY.md)).
 
@@ -222,4 +305,4 @@ audit evidence.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
